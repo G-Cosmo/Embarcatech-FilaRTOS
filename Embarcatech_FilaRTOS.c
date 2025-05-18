@@ -55,6 +55,17 @@ typedef struct
 
 QueueHandle_t xQueueJoystickData;
 
+void play_buzzer(uint freq, float duty_cycle) {
+
+    uint slice = pwm_gpio_to_slice_num(BUZZER_PIN); //armazena a slice do PWM do buzzer
+    uint clock_divider = 4; // Define o divisor do clock (ajuste se necessário)
+    uint wrap = clock_get_hz(clk_sys) / (clock_divider * freq); //calcula o wrap do PWM buzzer
+
+    pwm_set_clkdiv(slice, clock_divider);   //configura o divisor de clock
+    pwm_set_wrap(slice, wrap);  //configura o wrap
+    pwm_set_gpio_level(BUZZER_PIN, wrap * duty_cycle);  //ativa o pwm
+}
+
 void gpio_irq_handler(uint gpio, uint32_t events)
 {
     uint64_t current_time = to_ms_since_boot(get_absolute_time()); //armazena o registrado no momento da interrupção
@@ -300,22 +311,50 @@ void vDisplayTask(void *params)
                 ssd1306_send_data(&ssd);  // Atualiza o display
             }
         }
-        // else
-        // {
-        //     vTaskDelay(pdMS_TO_TICKS(5)); // delay para sincronizar os leds
-        //     ssd1306_fill(&ssd, !color);  // Limpa o display
-        //     ssd1306_rect(&ssd, 3, 3, 122, 60, color, !color); // Desenha um retângulo
-        //     ssd1306_draw_string(&ssd, "Atencao", 36,28);
-        //     ssd1306_send_data(&ssd);  // Atualiza o display
-        //     vTaskDelay(pdMS_TO_TICKS(1470)); //amarelo fica 1 segundo acesso
-        //     ssd1306_fill(&ssd, !color);  // Limpa o display
-        //     ssd1306_send_data(&ssd);  // Atualiza o display
-        //     vTaskDelay(pdMS_TO_TICKS(470)); //amarelo fica 0,5 segundo apagado
-        // }
     }
 }
 
+void vBuzzerTask(void *params)
+{
+    uint wrap_buzzer = 10000;   //define o wrap do buzzer
+    uint buzzer_freq = 1000;    //frequencia do buzzer
 
+    gpio_set_function(BUZZER_PIN, GPIO_FUNC_PWM); //define o pino do argumento como PWM
+
+    uint slice_num = pwm_gpio_to_slice_num(BUZZER_PIN);   //armazena a slice do PWM
+    pwm_set_wrap(slice_num, wrap_buzzer);  //configura o wrap do PWM (máximo do contador)
+    
+    pwm_set_enabled(slice_num, true);  //ativa o PWM
+
+    joystick_data_t joydata;
+
+    while(1)
+    {
+        if (xQueueReceive(xQueueJoystickData, &joydata, portMAX_DELAY) == pdTRUE)
+        {
+            if(joydata.x_percentual > 70.0 || joydata.y_percentual > 80.0)
+            {
+                
+                play_buzzer(buzzer_freq, 0.5); //bip em 1KHz com 50% de D.C.
+                vTaskDelay(pdMS_TO_TICKS(300)); // toca por 0.3 seg
+                play_buzzer(buzzer_freq, 0); //bip em 1KHz com 0% de D.C. (desligado)
+                vTaskDelay(pdMS_TO_TICKS(100)); // desliga por 0.1 seg
+
+            }//led amarelo se o nível da água for maior que 40% ou volume de chuva maior que 50%
+            else if(joydata.x_percentual > 40.0 || joydata.y_percentual > 50.0) 
+            {
+                play_buzzer(buzzer_freq/2, 0.5); //bip em 1KHz com 50% de D.C.
+                vTaskDelay(pdMS_TO_TICKS(300)); // toca por 0.3 seg
+                play_buzzer(buzzer_freq/2, 0); //bip em 1KHz com 0% de D.C. (desligado)
+                vTaskDelay(pdMS_TO_TICKS(1000)); // desliga por 0.1 seg
+
+            }else{
+                play_buzzer(buzzer_freq, 0); //bip em 1KHz com 50% de D.C.
+            }
+
+        }
+    }
+}
 
 int main()
 {
@@ -335,10 +374,10 @@ int main()
     xTaskCreate(vLedTask, "led RGB Task", 256, NULL, 1, NULL);
     xTaskCreate(vMatrixTask, "RGB Matrix Task", 256, NULL, 1, NULL);
     xTaskCreate(vDisplayTask, "Display Task", 512, NULL, 1, NULL);
+    xTaskCreate(vBuzzerTask, "Buzzer Task", 256, NULL, 1, NULL);
 
 
     vTaskStartScheduler();
     panic_unsupported();
-
 
 }
