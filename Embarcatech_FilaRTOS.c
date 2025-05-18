@@ -6,6 +6,7 @@
 #include "hardware/pwm.h"
 #include "hardware/adc.h"
 #include "lib/ssd1306.h"
+#include "lib/ws2812.h"
 #include "lib/font.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -17,7 +18,7 @@
 #define I2C_PORT i2c1
 #define I2C_SDA 14
 #define I2C_SCL 15
-#define endereco 0x3C
+#define address 0x3C
 
 //pinos do adc para o joystick
 #define ADC_JOYSTICK_X 26
@@ -35,6 +36,9 @@
 #define BUZZER_PIN 10   //pino do buzzer
 
 uint64_t last_time = 0;
+
+bool color = true;  //variavel que indica que se o pixel está ligado ou desligado
+ssd1306_t ssd; //inicializa a estrutura do display
 
 //definção da estrutura que armazena os dados do joystick
 typedef struct
@@ -59,9 +63,9 @@ void gpio_irq_handler(uint gpio, uint32_t events)
     {
         if(gpio == buttonB) 
         {
-            // npClear();  //limpa a matriz de leds
-            // ssd1306_fill(&ssd, !color); // Limpa o display
-            // ssd1306_send_data(&ssd);  // Atualiza o display
+            npClear();  //limpa a matriz de leds
+            ssd1306_fill(&ssd, !color); // Limpa o display
+            ssd1306_send_data(&ssd);  // Atualiza o display
             reset_usb_boot(0, 0);   //coloca em modo bootloader
         }
         last_time = current_time; //atualiza as variáveis de tempo
@@ -146,6 +150,7 @@ void vLedTask(void *params)
     
 
     joystick_data_t joydata;
+
     while (true)
     {
         if (xQueueReceive(xQueueJoystickData, &joydata, portMAX_DELAY) == pdTRUE)
@@ -174,6 +179,141 @@ void vLedTask(void *params)
     }
 }
 
+void vMatrixTask(void *params)
+{
+    npInit(LED_PIN);        //inicializa matriz de led
+    npClear();              //limpa a matriz
+
+    //frame de alerta
+    int frameA[5][5] = {
+
+        {0, 0, 0, 0, 0},
+        {0, 1, 1, 1, 0},
+        {0, 1, 1, 1, 0},
+        {0, 1, 1, 1, 0},
+        {0, 0, 0, 0, 0}
+        };
+
+    //fram de perigo
+    int frameD[5][5] = {
+        {1, 1, 1, 1, 1},
+        {1, 1, 1, 1, 1},
+        {1, 1, 1, 1, 1},
+        {1, 1, 1, 1, 1},
+        {1, 1, 1, 1, 1}
+        };
+            
+    joystick_data_t joydata;
+
+
+    while(true)
+    {
+        if (xQueueReceive(xQueueJoystickData, &joydata, portMAX_DELAY) == pdTRUE)
+        {
+            //led amarelo se o nível da água for maior que 70% ou volume de chuva maior que 80%
+            if(joydata.x_percentual > 70.0 || joydata.y_percentual > 80.0)
+            {
+                print_frame(frameD, 80, 0,0);
+                
+            }//led amarelo se o nível da água for maior que 40% ou volume de chuva maior que 50%
+            else if(joydata.x_percentual > 40.0 || joydata.y_percentual > 50.0) 
+            {
+                print_frame(frameA, 50, 50, 0);
+
+            }else{
+                //Desliga os led se o nível da água e volume de chuva estiverem normais
+                npClear();
+            }
+        }
+
+    }
+}
+
+void vDisplayTask(void *params)
+{
+    i2c_init(I2C_PORT, 400 * 1000);
+    gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
+    gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
+    gpio_pull_up(I2C_SDA);
+    gpio_pull_up(I2C_SCL);
+
+    ssd1306_t ssd;
+    ssd1306_init(&ssd, WIDTH, HEIGHT, false, address, I2C_PORT);
+    ssd1306_config(&ssd);
+    ssd1306_send_data(&ssd);
+    //limpa o display. O display inicia com todos os pixels apagados.
+    ssd1306_fill(&ssd, false);
+    ssd1306_send_data(&ssd);
+
+    joystick_data_t joydata;
+
+    char x_str[10];
+    char y_str[10];
+
+    while(true)
+    {
+        if (xQueueReceive(xQueueJoystickData, &joydata, portMAX_DELAY) == pdTRUE)
+        {
+            sprintf(x_str, "%.2f%%", joydata.x_percentual);
+            sprintf(y_str, "%.2f%%", joydata.y_percentual);
+
+
+             if(joydata.x_percentual > 70.0 || joydata.y_percentual > 80.0)
+            {
+                ssd1306_fill(&ssd, !color);  // Limpa o display
+                ssd1306_rect(&ssd, 3, 3, 122, 60, color, !color); // Desenha um retângulo
+                ssd1306_hline(&ssd, 3, 122, 32, color); //desenha a linha horizontal que divide o display no meio
+                ssd1306_vline(&ssd, 61, 32, 60, color); //desenha a linha vertical que divide o display no meio
+                ssd1306_draw_string(&ssd, "PERIGO!", 37, 8);
+                ssd1306_draw_string(&ssd, "NIVEL ALTO!", 18, 20);
+                ssd1306_draw_string(&ssd, "N.AGUA", 8, 34);
+                ssd1306_draw_string(&ssd, x_str, 8, 46);
+                ssd1306_draw_string(&ssd, "V.CHUVA", 65, 34);
+                ssd1306_draw_string(&ssd, y_str, 67, 46);
+                ssd1306_send_data(&ssd);  // Atualiza o display
+                
+            }//led amarelo se o nível da água for maior que 40% ou volume de chuva maior que 50%
+            else if(joydata.x_percentual > 40.0 || joydata.y_percentual > 50.0) 
+            {
+                ssd1306_fill(&ssd, !color);  // Limpa o display
+                ssd1306_rect(&ssd, 3, 3, 122, 60, color, !color); // Desenha um retângulo
+                ssd1306_hline(&ssd, 3, 122, 32, color);
+                ssd1306_vline(&ssd, 61, 32, 60, color);
+                ssd1306_draw_string(&ssd, "ALERTA", 37, 8);
+                ssd1306_draw_string(&ssd, "NIVEL MEDIO", 16, 20);
+                ssd1306_draw_string(&ssd, "N.AGUA", 8, 34);
+                ssd1306_draw_string(&ssd, x_str, 8, 46);
+                ssd1306_draw_string(&ssd, "V.CHUVA", 65, 34);
+                ssd1306_draw_string(&ssd, y_str, 67, 46);
+                ssd1306_send_data(&ssd);  // Atualiza o display
+
+            }else{
+                ssd1306_fill(&ssd, !color);  // Limpa o display
+                ssd1306_rect(&ssd, 3, 3, 122, 60, color, !color); // Desenha um retângulo
+                ssd1306_hline(&ssd, 3, 122, 32, color);
+                ssd1306_vline(&ssd, 61, 32, 60, color);
+                ssd1306_draw_string(&ssd, "NIVEL SEGURO", 15, 15);
+                ssd1306_draw_string(&ssd, "N.AGUA", 8, 34);
+                ssd1306_draw_string(&ssd, x_str, 8, 46);
+                ssd1306_draw_string(&ssd, "V.CHUVA", 65, 34);
+                ssd1306_draw_string(&ssd, y_str, 67, 46);
+                ssd1306_send_data(&ssd);  // Atualiza o display
+            }
+        }
+        // else
+        // {
+        //     vTaskDelay(pdMS_TO_TICKS(5)); // delay para sincronizar os leds
+        //     ssd1306_fill(&ssd, !color);  // Limpa o display
+        //     ssd1306_rect(&ssd, 3, 3, 122, 60, color, !color); // Desenha um retângulo
+        //     ssd1306_draw_string(&ssd, "Atencao", 36,28);
+        //     ssd1306_send_data(&ssd);  // Atualiza o display
+        //     vTaskDelay(pdMS_TO_TICKS(1470)); //amarelo fica 1 segundo acesso
+        //     ssd1306_fill(&ssd, !color);  // Limpa o display
+        //     ssd1306_send_data(&ssd);  // Atualiza o display
+        //     vTaskDelay(pdMS_TO_TICKS(470)); //amarelo fica 0,5 segundo apagado
+        // }
+    }
+}
 
 
 
@@ -193,6 +333,9 @@ int main()
     //cria as tasks
     xTaskCreate(vJoystickTask, "Joystick Task", 256, NULL, 1, NULL);
     xTaskCreate(vLedTask, "led RGB Task", 256, NULL, 1, NULL);
+    xTaskCreate(vMatrixTask, "RGB Matrix Task", 256, NULL, 1, NULL);
+    xTaskCreate(vDisplayTask, "Display Task", 512, NULL, 1, NULL);
+
 
     vTaskStartScheduler();
     panic_unsupported();
