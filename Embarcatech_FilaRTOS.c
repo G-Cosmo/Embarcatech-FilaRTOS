@@ -30,7 +30,6 @@
 #define LED_BLUE 12
 #define LED_GREEN  11
 
-#define buttonA 5
 #define buttonB 6
 
 #define BUZZER_PIN 10   //pino do buzzer
@@ -72,13 +71,10 @@ void gpio_irq_handler(uint gpio, uint32_t events)
     
     if(current_time - last_time > 200)  //checa se passou pelo menos 200 ms entre duas ativações do botão
     {
-        if(gpio == buttonB) 
-        {
-            npClear();  //limpa a matriz de leds
-            ssd1306_fill(&ssd, !color); // Limpa o display
-            ssd1306_send_data(&ssd);  // Atualiza o display
-            reset_usb_boot(0, 0);   //coloca em modo bootloader
-        }
+
+        npClear();  //limpa a matriz de leds
+        reset_usb_boot(0, 0);   //coloca em modo bootloader
+    
         last_time = current_time; //atualiza as variáveis de tempo
     }
 }
